@@ -22,6 +22,9 @@ CITY_NAME = "Poltava"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Глобальна змінна для з’єднання з базою даних
+conn = None
+
 # Визначення станів для запуску бота
 class UserState(StatesGroup):
     started = State()
@@ -144,22 +147,51 @@ def get_registered_inline_keyboard():
     ])
     return keyboard
 
-# Обробник початкових повідомлень (тільки для стану None або UserState)
-@dp.message(lambda message: not message.contact, Command("start"))
+# Обробник введення імені (переміщено перед handle_initial_message)
+@dp.message(Registration.waiting_for_name)
+async def process_name(message: Message, state: FSMContext):
+    global conn
+    user_id = message.from_user.id
+    name = message.text.strip()
+    current_state = await state.get_state()
+    print(f"process_name triggered for user {user_id}, message: '{name}', state: {current_state}")
+    if not name:
+        await message.reply("Ім’я не може бути порожнім. Спробуйте ще раз:", parse_mode="Markdown")
+        return
+    user = await get_user(conn, user_id)
+    if not user or not user["phone_number"]:
+        print(f"Error: No phone number found for user {user_id}")
+        await message.reply("Спочатку поділіться номером телефону через 'Зареєструватися'.",
+                            reply_markup=get_unregistered_inline_keyboard(), parse_mode="Markdown")
+        await state.clear()
+        return
+    await add_user(conn, user_id, phone_number=user["phone_number"], name=name)
+    print(f"User {user_id} registered with phone: {user['phone_number']}, name: {name}")
+    await message.reply(f"Реєстрацію завершено!\nНомер: {user['phone_number']}\nІм’я: {name}",
+                        reply_markup=get_registered_inline_keyboard(), parse_mode="Markdown")
+    await state.clear()
+    print(f"State cleared for user {user_id}")
+
+# Обробник першого повідомлення
+@dp.message(lambda message: not message.contact)
 async def handle_initial_message(message: Message, state: FSMContext):
+    global conn
     user_id = message.from_user.id
     current_state = await state.get_state()
     
     print(f"User {user_id} sent message: '{message.text}', Current state: {current_state}")
-    if current_state is None or current_state == UserState.started.state:
-        is_complete = await is_registration_complete(user_id)
+    if current_state == "Registration:waiting_for_name":
+        print(f"Skipping handle_initial_message for user {user_id} as state is waiting_for_name")
+        return  # Пропускаємо обробку, якщо чекаємо ім’я
+    if current_state is None:
+        is_complete = await is_registration_complete(conn, user_id)
         print(f"User {user_id} initiated bot. Registration complete: {is_complete}")
         if is_complete:
             await message.reply("Вітаю! Виберіть опцію:", 
                               reply_markup=get_registered_inline_keyboard(), 
                               parse_mode="Markdown")
         else:
-            user = await get_user(user_id)
+            user = await get_user(conn, user_id)
             if user and user["phone_number"] and not user["name"]:
                 await message.reply("Ви вже поділилися номером телефону. Тепер введіть ваше ім’я:",
                                   parse_mode="Markdown")
@@ -169,6 +201,21 @@ async def handle_initial_message(message: Message, state: FSMContext):
                                   reply_markup=get_unregistered_inline_keyboard(), 
                                   parse_mode="Markdown")
         await state.set_state(UserState.started)
+    else:
+        user = await get_user(conn, user_id)
+        if not await is_registration_complete(conn, user_id):
+            if user and user["phone_number"] and not user["name"]:
+                await message.reply("Ви вже поділилися номером телефону. Тепер введіть ваше ім’я:",
+                                  parse_mode="Markdown")
+                await state.set_state(Registration.waiting_for_name)
+            else:
+                await message.reply(f"{CLOCK} Для доступу до прогнозів зареєструйтесь, поділившись номером телефону:",
+                                  reply_markup=get_unregistered_inline_keyboard(), 
+                                  parse_mode="Markdown")
+        else:
+            await message.reply(f"{CLOCK} Оберіть опцію з меню:", 
+                              reply_markup=get_registered_inline_keyboard(), 
+                              parse_mode="Markdown")
 
 # Обробник інлайн-кнопки "Зареєструватися"
 @dp.callback_query(F.data == "register")
@@ -184,43 +231,22 @@ async def process_register_callback(callback: types.CallbackQuery, state: FSMCon
 # Обробник отримання номера телефону
 @dp.message(F.contact)
 async def process_phone(message: Message, state: FSMContext):
+    global conn
     user_id = message.from_user.id
     phone_number = message.contact.phone_number
     print(f"User {user_id} shared phone: {phone_number}")
-    await add_user(user_id, phone_number=phone_number)
+    await add_user(conn, user_id, phone_number=phone_number)
     await message.reply("Тепер введіть ваше ім’я:", parse_mode="Markdown")
     await state.set_state(Registration.waiting_for_name)
     print(f"State set to 'waiting_for_name' for user {user_id}")
 
-# Обробник введення імені
-@dp.message(Registration.waiting_for_name)
-async def process_name(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    name = message.text.strip()
-    print(f"User {user_id} entered name: '{name}' in state Registration:waiting_for_name")
-    if not name:
-        await message.reply("Ім’я не може бути порожнім. Спробуйте ще раз:", parse_mode="Markdown")
-        return
-    user = await get_user(user_id)
-    if not user or not user["phone_number"]:
-        print(f"Error: No phone number found for user {user_id}")
-        await message.reply("Спочатку поділіться номером телефону через 'Зареєструватися'.",
-                            reply_markup=get_unregistered_inline_keyboard(), parse_mode="Markdown")
-        await state.clear()
-        return
-    await add_user(user_id, phone_number=user["phone_number"], name=name)
-    print(f"User {user_id} registered with phone: {user['phone_number']}, name: {name}")
-    await message.reply(f"Реєстрацію завершено!\nНомер: {user['phone_number']}\nІм’я: {name}",
-                        reply_markup=get_registered_inline_keyboard(), parse_mode="Markdown")
-    await state.clear()
-    print(f"State cleared for user {user_id}")
-
 # Обробник інлайн-кнопок
 @dp.callback_query(F.data == "profile")
 async def show_profile_inline(callback: types.CallbackQuery):
+    global conn
     user_id = callback.from_user.id
-    user = await get_user(user_id)
-    is_complete = await is_registration_complete(user_id)
+    user = await get_user(conn, user_id)
+    is_complete = await is_registration_complete(conn, user_id)
     print(f"User {user_id} requested profile. User data: {user}, Registration complete: {is_complete}")
     if user and is_complete:
         await callback.message.reply(f"Ваш профіль:\nНомер телефону: {user['phone_number']}\nІм’я: {user['name']}",
@@ -232,11 +258,12 @@ async def show_profile_inline(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "today")
 async def handle_today_inline(callback: types.CallbackQuery):
+    global conn
     user_id = callback.from_user.id
-    is_complete = await is_registration_complete(user_id)
+    is_complete = await is_registration_complete(conn, user_id)
     print(f"User {user_id} requested today weather. Registration complete: {is_complete}")
     if is_complete:
-        user = await get_user(user_id)
+        user = await get_user(conn, user_id)
         weather = await get_current_weather(user["name"])
         await callback.message.reply(weather, reply_markup=get_registered_inline_keyboard(), parse_mode="Markdown")
     else:
@@ -246,8 +273,9 @@ async def handle_today_inline(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "tomorrow")
 async def handle_tomorrow_inline(callback: types.CallbackQuery):
+    global conn
     user_id = callback.from_user.id
-    is_complete = await is_registration_complete(user_id)
+    is_complete = await is_registration_complete(conn, user_id)
     print(f"User {user_id} requested tomorrow weather. Registration complete: {is_complete}")
     if is_complete:
         weather = await get_tomorrow_weather()
@@ -263,8 +291,9 @@ async def handle_tomorrow_inline(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "multi_day")
 async def handle_multi_day_inline(callback: types.CallbackQuery):
+    global conn
     user_id = callback.from_user.id
-    is_complete = await is_registration_complete(user_id)
+    is_complete = await is_registration_complete(conn, user_id)
     print(f"User {user_id} requested multi-day weather. Registration complete: {is_complete}")
     if is_complete:
         weather = await get_multi_day_forecast()
@@ -280,8 +309,12 @@ async def handle_multi_day_inline(callback: types.CallbackQuery):
 
 # Запуск бота
 async def main():
-    await init_db()  # Ініціалізація бази даних
-    await dp.start_polling(bot)
+    global conn
+    conn = await init_db()  # Ініціалізуємо з’єднання один раз
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await conn.close()  # Закриваємо з’єднання після завершення
 
 if __name__ == "__main__":
     asyncio.run(main())
