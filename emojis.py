@@ -1,0 +1,14 @@
+CLOCK = "\U000023F0"         # ⏰
+SUN = "\U0001F324"           # 🌤️
+CITY = "\U0001F3D9"          # 🏙
+THERMOMETER = "\U0001F321"   # 🌡️
+DROPLET = "\U0001F4A7"       # 💧
+WIND = "\U0001F32C"          # 🌬️
+CLOUD = "\U00002601"         # ☁️
+WIND_BLOW = "\U0001F4A8"     # 💨
+COMPASS = "\U0001F9ED"       # 🧭
+EYE = "\U0001F441"           # 👁️
+SUNRISE = "\U0001F305"       # 🌅
+SUNSET = "\U0001F307"        # 🌇
+CALENDAR = "\U0001F4C5"      # 📅
+CLOUD_WITH_SUN = "\U000026C5" # ⛅
