@@ -55,3 +55,4 @@ async def is_registration_complete(conn, user_id: int):
     user = await get_user(conn, user_id)
     print(f"Checking registration for user {user_id}: {user}")  # Дебаг-вивід
     return user is not None and bool(user.get("phone_number")) and bool(user.get("name"))
+#v2
